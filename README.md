@@ -1,0 +1,1 @@
+# skanowanie_linux
