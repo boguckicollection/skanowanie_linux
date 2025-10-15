@@ -1,8 +1,27 @@
 import os
+import sys
+import importlib.util
+from datetime import datetime
+
 import sane
+
+
+def ensure_module(name: str, install_hint: str) -> None:
+    """Sprawdza dostępność modułu i kończy program z czytelnym komunikatem."""
+    if importlib.util.find_spec(name) is None:
+        print(
+            f"Brak modułu '{name}'. Zainstaluj go poleceniem: {install_hint}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+ensure_module("cv2", "pip install opencv-python-headless")
+ensure_module("numpy", "pip install numpy")
+ensure_module("PIL", "pip install pillow")
+
 import cv2  # OpenCV do analizy obrazu
 import numpy as np
-from datetime import datetime
 from PIL import Image, ImageEnhance
 
 # --- Konfiguracja ---
