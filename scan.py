@@ -6,8 +6,10 @@ from datetime import datetime
 from PIL import Image, ImageEnhance
 
 # --- Konfiguracja ---
-NAZWA_SKANERA = "fujitsu:fi-630dj:13583" # Wpisz nazwę swojego skanera
 DPI = 300
+
+# Nazwa skanera pozostała dla kompatybilności, ale nie jest używana bezpośrednio.
+NAZWA_SKANERA = "fujitsu:fi-630dj:13583"  # Domyślna nazwa skanera (fallback)
 
 # Konfiguracja Poprawy Obrazu
 WSP_JASNOSCI = 1.05  # 1.0 = bez zmian, > 1.0 = jaśniej
@@ -113,6 +115,54 @@ def main():
     print("Inicjalizacja SANE...")
     sane.init()
 
+    devices = sane.get_devices() or []
+    if devices:
+        print("Wykryte skanery:")
+        for idx, device in enumerate(devices):
+            nazwa, producent, model, typ = device
+            opis = f"{producent} {model}".strip()
+            typ_info = f" ({typ})" if typ else ""
+            print(f"  [{idx}] {nazwa} - {opis}{typ_info}")
+    else:
+        print("Nie wykryto żadnych skanerów przez SANE.")
+
+    fujitsu_matches = [device for device in devices if device[2] and "fi-6130" in device[2].lower()]
+    wybrane_urzadzenie = None
+
+    if len(fujitsu_matches) == 1:
+        wybrane_urzadzenie = fujitsu_matches[0]
+        nazwa, producent, model, _ = wybrane_urzadzenie
+        print(f"Automatycznie wybrano skaner: {producent} {model} ({nazwa})")
+    elif devices:
+        print("Wybierz skaner z listy wpisując numer odpowiadający urządzeniu (Enter = 0):")
+        while True:
+            wybor = input("> ").strip()
+            if wybor == "":
+                wybor = "0"
+            try:
+                indeks = int(wybor)
+            except ValueError:
+                print("Nieprawidłowy wybór. Spróbuj ponownie.")
+                continue
+
+            if 0 <= indeks < len(devices):
+                wybrane_urzadzenie = devices[indeks]
+                nazwa, producent, model, _ = wybrane_urzadzenie
+                print(f"Wybrano skaner: {producent} {model} ({nazwa})")
+                break
+
+            print("Wybrany numer jest poza zakresem. Spróbuj ponownie.")
+
+    if wybrane_urzadzenie is None:
+        if devices:
+            print("Nie udało się wybrać skanera. Używanie domyślnej konfiguracji.")
+        else:
+            print("Brak dostępnych skanerów. Zakończono.")
+            sane.exit()
+            return
+
+    nazwa_skanera = wybrane_urzadzenie[0] if wybrane_urzadzenie else NAZWA_SKANERA
+
     dzisiejsza_data = datetime.now().strftime("%Y-%m-%d")
     if not os.path.exists(dzisiejsza_data):
         os.makedirs(dzisiejsza_data)
@@ -120,8 +170,8 @@ def main():
 
     skaner = None
     try:
-        print(f"Otwieranie skanera: {NAZWA_SKANERA}")
-        skaner = sane.open(NAZWA_SKANERA)
+        print(f"Otwieranie skanera: {nazwa_skanera}")
+        skaner = sane.open(nazwa_skanera)
 
         print("Konfiguracja parametrów skanowania...")
         skaner.mode = 'Color'
