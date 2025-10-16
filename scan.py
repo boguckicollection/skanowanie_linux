@@ -135,8 +135,19 @@ def process_image(image_path):
 
     # 3. Transformacja perspektywy (prostowanie)
     rect = order_points(card_contour)
-    (tl, tr, br, bl) = rect
-    
+
+    # Dodajemy niewielki margines, aby zachować pełną ramkę karty
+    center = rect.mean(axis=0)
+    scale_factor = 1.03
+    rect_with_margin = center + (rect - center) * scale_factor
+    rect_with_margin = np.clip(
+        rect_with_margin,
+        [0, 0],
+        [image.shape[1] - 1, image.shape[0] - 1],
+    ).astype("float32")
+
+    (tl, tr, br, bl) = rect_with_margin
+
     # Obliczenie szerokości i wysokości docelowego obrazu
     widthA = np.linalg.norm(br - bl)
     widthB = np.linalg.norm(tr - tl)
@@ -154,7 +165,7 @@ def process_image(image_path):
         [0, maxHeight - 1]], dtype="float32")
 
     # Obliczenie macierzy transformacji i jej zastosowanie
-    M = cv2.getPerspectiveTransform(rect, dst)
+    M = cv2.getPerspectiveTransform(rect_with_margin, dst)
     warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
     
     # 4. Poprawa kolorów (używając biblioteki Pillow)
