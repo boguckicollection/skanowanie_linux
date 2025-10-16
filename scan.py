@@ -34,8 +34,8 @@ DIMENSION_TOLERANCE = 0.10  # 10%
 NAZWA_SKANERA = "fujitsu:fi-630dj:13583"  # Domyślna nazwa skanera (fallback)
 
 # Konfiguracja Poprawy Obrazu
-WSP_JASNOSCI = 1.05  # 1.0 = bez zmian, > 1.0 = jaśniej
-WSP_KONTRASTU = 1.15  # 1.0 = bez zmian, > 1.0 = większy kontrast
+WSP_JASNOSCI = 1.20  # 1.0 = bez zmian, > 1.0 = jaśniej
+WSP_KONTRASTU = 1.30  # Podbicie kontrastu, by wyrównać słabsze skany
 WSP_NASYCENIA = 1.10  # 1.0 = bez zmian, > 1.0 = żywsze kolory
 
 # --- Koniec Konfiguracji ---
