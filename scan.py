@@ -27,6 +27,9 @@ from PIL import Image, ImageEnhance
 
 # --- Konfiguracja ---
 DPI = 600
+CARD_WIDTH_MM = 63.5
+CARD_HEIGHT_MM = 88.9
+DIMENSION_TOLERANCE = 0.10  # 10%
 
 # Nazwa skanera pozostała dla kompatybilności, ale nie jest używana bezpośrednio.
 NAZWA_SKANERA = "fujitsu:fi-630dj:13583"  # Domyślna nazwa skanera (fallback)
@@ -67,32 +70,73 @@ def process_image(image_path):
 
     # 2. Znalezienie konturów (kształtów) na obrazie
     contours, _ = cv2.findContours(edges.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
+
     if not contours:
         print("  BŁĄD: Nie znaleziono żadnych konturów.")
         return None
+
+    mm_to_px = DPI / 25.4
+    expected_short_side_px = min(CARD_WIDTH_MM, CARD_HEIGHT_MM) * mm_to_px
+    expected_long_side_px = max(CARD_WIDTH_MM, CARD_HEIGHT_MM) * mm_to_px
+    expected_ratio = expected_long_side_px / expected_short_side_px
+
+    short_min = expected_short_side_px * (1 - DIMENSION_TOLERANCE)
+    short_max = expected_short_side_px * (1 + DIMENSION_TOLERANCE)
+    long_min = expected_long_side_px * (1 - DIMENSION_TOLERANCE)
+    long_max = expected_long_side_px * (1 + DIMENSION_TOLERANCE)
+    ratio_min = expected_ratio * (1 - DIMENSION_TOLERANCE)
+    ratio_max = expected_ratio * (1 + DIMENSION_TOLERANCE)
+
+    print(
+        "  Oczekiwane wymiary karty (px):"
+        f" krótszy bok ~{expected_short_side_px:.1f} ({short_min:.1f}-{short_max:.1f}),"
+        f" dłuższy bok ~{expected_long_side_px:.1f} ({long_min:.1f}-{long_max:.1f}),"
+        f" stosunek boków ~{expected_ratio:.3f} ({ratio_min:.3f}-{ratio_max:.3f})"
+    )
 
     # Sortowanie konturów według pola powierzchni, od największych
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
     card_contour = None
     for c in contours:
-        # Aproksymacja konturu do prostszej figury
+        # Aproksymacja konturu do prostszej figury i podstawowe filtrowanie
         peri = cv2.arcLength(c, True)
         approx = cv2.approxPolyDP(c, 0.02 * peri, True)
         area = cv2.contourArea(c)
         if area <= 3000:  # Minimalne pole, by odrzucić śmieci
             continue
 
-        # Jeśli aproksymowany kontur ma 4 rogi – wykorzystujemy je bez zmian
+        rect = cv2.minAreaRect(c)
+        (width_px, height_px) = rect[1]
+        if width_px == 0 or height_px == 0:
+            continue
+
+        short_side, long_side = sorted((width_px, height_px))
+        ratio = long_side / short_side
+        approx_area = width_px * height_px
+
+        short_ok = short_min <= short_side <= short_max
+        long_ok = long_min <= long_side <= long_max
+        ratio_ok = ratio_min <= ratio <= ratio_max
+
+        print(
+            "    Kontur:"
+            f" krótki bok={short_side:.1f}px (ok={short_ok}),"
+            f" długi bok={long_side:.1f}px (ok={long_ok}),"
+            f" ratio={ratio:.3f} (ok={ratio_ok}),"
+            f" pole~{approx_area:.0f}px^2"
+        )
+
+        if not (short_ok and long_ok and ratio_ok):
+            continue
+
+        # Jeśli aproksymowany kontur ma 4 rogi – wykorzystujemy je
         if len(approx) == 4:
             card_contour = approx.reshape(4, 2).astype("float32")
-            break
-
-        # W przeciwnym wypadku obliczamy minimalny prostokąt otaczający kontur
-        rect = cv2.minAreaRect(c)
-        box = cv2.boxPoints(rect)
-        card_contour = np.array(box, dtype="float32")
+        else:
+            box = cv2.boxPoints(rect)
+            card_contour = np.array(box, dtype="float32")
+        print("    -> Kontur zaakceptowany jako karta.")
         break
 
     if card_contour is None:
