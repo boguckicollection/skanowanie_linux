@@ -80,17 +80,27 @@ def process_image(image_path):
         # Aproksymacja konturu do prostszej figury
         peri = cv2.arcLength(c, True)
         approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-        # Szukamy pierwszego z brzegu dużego konturu, który ma 4 rogi
-        if len(approx) == 4 and cv2.contourArea(c) > 50000: # Minimalne pole, by odrzucić śmieci
-            card_contour = approx
+        area = cv2.contourArea(c)
+        if area <= 3000:  # Minimalne pole, by odrzucić śmieci
+            continue
+
+        # Jeśli aproksymowany kontur ma 4 rogi – wykorzystujemy je bez zmian
+        if len(approx) == 4:
+            card_contour = approx.reshape(4, 2).astype("float32")
             break
+
+        # W przeciwnym wypadku obliczamy minimalny prostokąt otaczający kontur
+        rect = cv2.minAreaRect(c)
+        box = cv2.boxPoints(rect)
+        card_contour = np.array(box, dtype="float32")
+        break
 
     if card_contour is None:
         print("  BŁĄD: Nie udało się zidentyfikować karty na obrazie.")
         return None
 
     # 3. Transformacja perspektywy (prostowanie)
-    rect = order_points(card_contour.reshape(4, 2))
+    rect = order_points(card_contour)
     (tl, tr, br, bl) = rect
     
     # Obliczenie szerokości i wysokości docelowego obrazu
