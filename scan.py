@@ -65,7 +65,25 @@ def process_image(image_path):
     # 1. Konwersja do skali szarości, rozmycie i wykrywanie krawędzi
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (7, 7), 0)
-    edges = cv2.Canny(blurred, 50, 150)
+
+    # Automatyczne wyznaczanie progów Canny na podstawie jasności rozmytego obrazu
+    median = np.median(blurred)
+    if median <= 0 or median >= 255:
+        non_extreme = blurred[(blurred > 0) & (blurred < 255)]
+        if non_extreme.size:
+            median = float(np.median(non_extreme))
+    sigma = 0.33
+    lower = max(0, int((1 - sigma) * median))
+    upper = min(255, int((1 + sigma) * median))
+    if upper <= lower:
+        upper = min(255, lower + 10)
+    print(
+        "  Progi Canny:",
+        f"median={median:.1f}",
+        f"lower={lower}",
+        f"upper={upper}",
+    )
+    edges = cv2.Canny(blurred, lower, upper)
 
     # 2. Znalezienie konturów (kształtów) na obrazie
     contours, _ = cv2.findContours(edges.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
