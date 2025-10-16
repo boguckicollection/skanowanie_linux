@@ -197,37 +197,66 @@ def main():
         skaner.mode = 'Color'
         skaner.resolution = DPI
         
-        # Skanujemy tylko jedną stronę (w pętli, gdybyś chciał skanować więcej)
-        # Na razie pętla wykona się tylko raz.
+        # Skanujemy kolejne karty do momentu przerwania pętli.
         licznik = 1
-        
-        print("Połóż kartę na szybie skanera i naciśnij Enter, aby rozpocząć...")
-        input() # Czekamy na użytkownika
 
-        print(f"Skanowanie obrazu nr {licznik}...")
-        temp_scan_path = "temp_scan.png"
-        skaner.start()
-        obraz_sane = skaner.snap()
-        obraz_sane.save(temp_scan_path)
-        print(f"Zapisano tymczasowy skan: {temp_scan_path}")
+        while True:
+            print("Połóż kartę na szybie skanera i naciśnij Enter, aby rozpocząć...")
+            input()  # Czekamy na użytkownika
 
-        # Przetwarzanie zeskanowanego obrazu
-        finalny_obraz = process_image(temp_scan_path)
+            print(f"Skanowanie obrazu nr {licznik}...")
+            temp_scan_path = "temp_scan.png"
 
-        if finalny_obraz is not None:
-            nazwa_pliku = os.path.join(dzisiejsza_data, f"karta_{licznik:03d}.png")
-            finalny_obraz.save(nazwa_pliku)
-            print(f"Zapisano finalny plik: {nazwa_pliku}")
-            os.remove(temp_scan_path)
-        else:
-            fallback_path = os.path.join(
-                dzisiejsza_data, f"karta_{licznik:03d}_oryginal.png"
-            )
-            shutil.move(temp_scan_path, fallback_path)
-            print(
-                "  UWAGA: Nie udało się przetworzyć obrazu. Zapisano oryginalny skan w: "
-                f"{fallback_path}"
-            )
+            try:
+                skaner.start()
+                obraz_sane = skaner.snap()
+            except sane._sane.error as e:
+                blad = str(e).lower()
+                pusty_podajnik = any(
+                    komunikat in blad
+                    for komunikat in (
+                        "document feeder out of documents",
+                        "document feeder empty",
+                        "feeder empty",
+                        "no documents",
+                    )
+                )
+
+                if pusty_podajnik:
+                    decyzja = input(
+                        "Podajnik pusty – [Enter] aby kontynuować, 'q' by zakończyć: "
+                    ).strip().lower()
+                    if decyzja == "q":
+                        print("Przerwano skanowanie na życzenie użytkownika.")
+                        break
+                    print("Kontynuuję oczekiwanie na kolejną kartę.")
+                    continue
+
+                print(f"BŁĄD: Problem ze skanerem: {e}")
+                break
+
+            obraz_sane.save(temp_scan_path)
+            print(f"Zapisano tymczasowy skan: {temp_scan_path}")
+
+            # Przetwarzanie zeskanowanego obrazu
+            finalny_obraz = process_image(temp_scan_path)
+
+            if finalny_obraz is not None:
+                nazwa_pliku = os.path.join(dzisiejsza_data, f"karta_{licznik:03d}.png")
+                finalny_obraz.save(nazwa_pliku)
+                print(f"Zapisano finalny plik: {nazwa_pliku}")
+                os.remove(temp_scan_path)
+            else:
+                fallback_path = os.path.join(
+                    dzisiejsza_data, f"karta_{licznik:03d}_oryginal.png"
+                )
+                shutil.move(temp_scan_path, fallback_path)
+                print(
+                    "  UWAGA: Nie udało się przetworzyć obrazu. Zapisano oryginalny skan w: "
+                    f"{fallback_path}"
+                )
+
+            licznik += 1
 
     except sane._sane.error as e:
         print(f"BŁĄD: Problem ze skanerem: {e}")
