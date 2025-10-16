@@ -1,6 +1,7 @@
 import os
 import sys
 import importlib.util
+import shutil
 from datetime import datetime
 
 import sane
@@ -212,14 +213,21 @@ def main():
 
         # Przetwarzanie zeskanowanego obrazu
         finalny_obraz = process_image(temp_scan_path)
-        
-        if finalny_obraz:
+
+        if finalny_obraz is not None:
             nazwa_pliku = os.path.join(dzisiejsza_data, f"karta_{licznik:03d}.png")
             finalny_obraz.save(nazwa_pliku)
             print(f"Zapisano finalny plik: {nazwa_pliku}")
-        
-        # Usunięcie tymczasowego pliku
-        os.remove(temp_scan_path)
+            os.remove(temp_scan_path)
+        else:
+            fallback_path = os.path.join(
+                dzisiejsza_data, f"karta_{licznik:03d}_oryginal.png"
+            )
+            shutil.move(temp_scan_path, fallback_path)
+            print(
+                "  UWAGA: Nie udało się przetworzyć obrazu. Zapisano oryginalny skan w: "
+                f"{fallback_path}"
+            )
 
     except sane._sane.error as e:
         print(f"BŁĄD: Problem ze skanerem: {e}")
