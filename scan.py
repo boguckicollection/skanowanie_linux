@@ -74,22 +74,18 @@ def process_image(image_path):
         print("  BŁĄD: Nie znaleziono żadnych konturów.")
         return None
 
-    mm_to_px = DPI / 25.4
-    expected_short_side_px = min(CARD_WIDTH_MM, CARD_HEIGHT_MM) * mm_to_px
-    expected_long_side_px = max(CARD_WIDTH_MM, CARD_HEIGHT_MM) * mm_to_px
-    expected_ratio = expected_long_side_px / expected_short_side_px
+    expected_ratio = max(CARD_WIDTH_MM, CARD_HEIGHT_MM) / min(CARD_WIDTH_MM, CARD_HEIGHT_MM)
 
-    short_min = expected_short_side_px * (1 - DIMENSION_TOLERANCE)
-    short_max = expected_short_side_px * (1 + DIMENSION_TOLERANCE)
-    long_min = expected_long_side_px * (1 - DIMENSION_TOLERANCE)
-    long_max = expected_long_side_px * (1 + DIMENSION_TOLERANCE)
     ratio_min = expected_ratio * (1 - DIMENSION_TOLERANCE)
     ratio_max = expected_ratio * (1 + DIMENSION_TOLERANCE)
 
+    image_area = image.shape[0] * image.shape[1]
+    area_min = image_area * 0.05
+    area_max = image_area * 0.30
+
     print(
-        "  Oczekiwane wymiary karty (px):"
-        f" krótszy bok ~{expected_short_side_px:.1f} ({short_min:.1f}-{short_max:.1f}),"
-        f" dłuższy bok ~{expected_long_side_px:.1f} ({long_min:.1f}-{long_max:.1f}),"
+        "  Kryteria detekcji karty:",
+        f" powierzchnia ~{area_min:.0f}-{area_max:.0f}px^2 (5-30% obrazu),",
         f" stosunek boków ~{expected_ratio:.3f} ({ratio_min:.3f}-{ratio_max:.3f})"
     )
 
@@ -101,10 +97,6 @@ def process_image(image_path):
         # Aproksymacja konturu do prostszej figury i podstawowe filtrowanie
         peri = cv2.arcLength(c, True)
         approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-        area = cv2.contourArea(c)
-        if area <= 3000:  # Minimalne pole, by odrzucić śmieci
-            continue
-
         rect = cv2.minAreaRect(c)
         (width_px, height_px) = rect[1]
         if width_px == 0 or height_px == 0:
@@ -114,19 +106,18 @@ def process_image(image_path):
         ratio = long_side / short_side
         approx_area = width_px * height_px
 
-        short_ok = short_min <= short_side <= short_max
-        long_ok = long_min <= long_side <= long_max
+        area_ok = area_min <= approx_area <= area_max
         ratio_ok = ratio_min <= ratio <= ratio_max
 
         print(
-            "    Kontur:"
-            f" krótki bok={short_side:.1f}px (ok={short_ok}),"
-            f" długi bok={long_side:.1f}px (ok={long_ok}),"
-            f" ratio={ratio:.3f} (ok={ratio_ok}),"
-            f" pole~{approx_area:.0f}px^2"
+            "    Kontur:",
+            f" krótki bok={short_side:.1f}px,",
+            f" długi bok={long_side:.1f}px,",
+            f" ratio={ratio:.3f} (ok={ratio_ok}),",
+            f" pole~{approx_area:.0f}px^2 (ok={area_ok})"
         )
 
-        if not (short_ok and long_ok and ratio_ok):
+        if not (area_ok and ratio_ok):
             continue
 
         # Jeśli aproksymowany kontur ma 4 rogi – wykorzystujemy je
