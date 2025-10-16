@@ -238,6 +238,12 @@ def main():
             obraz_sane.save(temp_scan_path)
             print(f"Zapisano tymczasowy skan: {temp_scan_path}")
 
+            oryginal_path = os.path.join(
+                dzisiejsza_data, f"karta_{licznik:03d}_oryginal.png"
+            )
+            shutil.copy(temp_scan_path, oryginal_path)
+            print(f"Zachowano oryginalny skan w: {oryginal_path}")
+
             # Przetwarzanie zeskanowanego obrazu
             finalny_obraz = process_image(temp_scan_path)
 
@@ -245,16 +251,13 @@ def main():
                 nazwa_pliku = os.path.join(dzisiejsza_data, f"karta_{licznik:03d}.png")
                 finalny_obraz.save(nazwa_pliku)
                 print(f"Zapisano finalny plik: {nazwa_pliku}")
-                os.remove(temp_scan_path)
             else:
-                fallback_path = os.path.join(
-                    dzisiejsza_data, f"karta_{licznik:03d}_oryginal.png"
-                )
-                shutil.move(temp_scan_path, fallback_path)
                 print(
-                    "  UWAGA: Nie udało się przetworzyć obrazu. Zapisano oryginalny skan w: "
-                    f"{fallback_path}"
+                    "  UWAGA: Nie udało się przetworzyć obrazu. Oryginalny skan dostępny w: "
+                    f"{oryginal_path}"
                 )
+                if os.path.exists(temp_scan_path):
+                    os.remove(temp_scan_path)
 
             licznik += 1
 
