@@ -4,9 +4,6 @@ import importlib.util
 import shutil
 from datetime import datetime
 
-import sane
-
-
 def ensure_module(name: str, install_hint: str) -> None:
     """Sprawdza dostępność modułu i kończy program z czytelnym komunikatem."""
     if importlib.util.find_spec(name) is None:
@@ -20,10 +17,12 @@ def ensure_module(name: str, install_hint: str) -> None:
 ensure_module("cv2", "pip install opencv-python-headless")
 ensure_module("numpy", "pip install numpy")
 ensure_module("PIL", "pip install pillow")
+ensure_module("sane", "pip install python-sane")
 
 import cv2  # OpenCV do analizy obrazu
 import numpy as np
 from PIL import Image, ImageEnhance
+import sane
 
 # --- Konfiguracja ---
 DPI = 600
