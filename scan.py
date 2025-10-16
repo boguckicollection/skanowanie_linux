@@ -26,7 +26,7 @@ import numpy as np
 from PIL import Image, ImageEnhance
 
 # --- Konfiguracja ---
-DPI = 300
+DPI = 600
 
 # Nazwa skanera pozostała dla kompatybilności, ale nie jest używana bezpośrednio.
 NAZWA_SKANERA = "fujitsu:fi-630dj:13583"  # Domyślna nazwa skanera (fallback)
