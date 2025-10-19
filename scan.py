@@ -97,12 +97,21 @@ def process_image(image_path):
     ratio_max = expected_ratio * (1 + DIMENSION_TOLERANCE)
 
     image_area = image.shape[0] * image.shape[1]
-    area_min = image_area * 0.05
-    area_max = image_area * 0.30
+    area_min_fraction = 0.05
+    area_max_fraction = 0.98
+    area_margin_fraction = 0.02  # pozwala zaakceptować karty wypełniające kadr
+
+    area_min = image_area * area_min_fraction
+    area_max = image_area * (1 + area_margin_fraction)
+
+    area_min_pct = area_min_fraction * 100
+    area_max_pct = min(area_max_fraction * 100, 100)
+    margin_note = " + margines" if area_max > image_area else ""
 
     print(
         "  Kryteria detekcji karty:",
-        f" powierzchnia ~{area_min:.0f}-{area_max:.0f}px^2 (5-30% obrazu),",
+        f" powierzchnia ~{area_min:.0f}-{area_max:.0f}px^2 ("
+        f"{area_min_pct:.0f}-{area_max_pct:.0f}% kadru{margin_note}),",
         f" stosunek boków ~{expected_ratio:.3f} ({ratio_min:.3f}-{ratio_max:.3f})"
     )
 
