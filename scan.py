@@ -318,17 +318,22 @@ def main():
             print(f"Zachowano oryginalny skan w: {oryginal_path}")
 
             # Przetwarzanie zeskanowanego obrazu
-            finalny_obraz = process_image(temp_scan_path)
+            finalny_obraz = None
+            try:
+                finalny_obraz = process_image(temp_scan_path)
 
-            if finalny_obraz is not None:
-                nazwa_pliku = os.path.join(dzisiejsza_data, f"karta_{licznik:03d}.png")
-                finalny_obraz.save(nazwa_pliku)
-                print(f"Zapisano finalny plik: {nazwa_pliku}")
-            else:
-                print(
-                    "  UWAGA: Nie udało się przetworzyć obrazu. Oryginalny skan dostępny w: "
-                    f"{oryginal_path}"
-                )
+                if finalny_obraz is not None:
+                    nazwa_pliku = os.path.join(
+                        dzisiejsza_data, f"karta_{licznik:03d}.png"
+                    )
+                    finalny_obraz.save(nazwa_pliku)
+                    print(f"Zapisano finalny plik: {nazwa_pliku}")
+                else:
+                    print(
+                        "  UWAGA: Nie udało się przetworzyć obrazu. Oryginalny skan dostępny w: "
+                        f"{oryginal_path}"
+                    )
+            finally:
                 if os.path.exists(temp_scan_path):
                     os.remove(temp_scan_path)
 
