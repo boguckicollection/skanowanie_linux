@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 import importlib.util
 import shutil
 from datetime import datetime
@@ -17,12 +18,10 @@ def ensure_module(name: str, install_hint: str) -> None:
 ensure_module("cv2", "pip install opencv-python-headless")
 ensure_module("numpy", "pip install numpy")
 ensure_module("PIL", "pip install pillow")
-ensure_module("sane", "pip install python-sane")
 
 import cv2  # OpenCV do analizy obrazu
 import numpy as np
 from PIL import Image, ImageEnhance
-import sane
 
 # --- Konfiguracja ---
 DPI = 600
@@ -203,8 +202,89 @@ def process_image(image_path):
     return final_image_pil
 
 
+def process_directory(input_dir, output_dir):
+    """Przetwarza wszystkie obsługiwane obrazy w katalogu wejściowym."""
+    print(f"Przetwarzanie katalogu: {input_dir}")
+
+    if not os.path.isdir(input_dir):
+        print(f"BŁĄD: Ścieżka '{input_dir}' nie jest katalogiem.", file=sys.stderr)
+        return 0
+
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"Pliki wynikowe zostaną zapisane w: {output_dir}")
+
+    supported_ext = (".png", ".jpg", ".jpeg")
+    entries = sorted(
+        entry
+        for entry in os.listdir(input_dir)
+        if entry.lower().endswith(supported_ext)
+    )
+
+    if not entries:
+        print("UWAGA: Nie znaleziono plików PNG/JPG do przetworzenia.")
+        return 0
+
+    successes = 0
+    for idx, filename in enumerate(entries, start=1):
+        source_path = os.path.join(input_dir, filename)
+        print(f"Przygotowanie do przetwarzania pliku nr {idx}: {source_path}")
+
+        wynik = process_image(source_path)
+        if wynik is None:
+            print(
+                f"  UWAGA: Plik '{filename}' został pominięty z powodu błędu przetwarzania."
+            )
+            continue
+
+        output_name = f"karta_{idx:03d}.png"
+        output_path = os.path.join(output_dir, output_name)
+        try:
+            wynik.save(output_path)
+            successes += 1
+            print(f"  Zapisano przetworzony plik: {output_path}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  BŁĄD: Nie udało się zapisać '{output_path}': {exc}")
+
+    print(
+        "Podsumowanie przetwarzania katalogu:",
+        f" {successes} z {len(entries)} plików zapisano poprawnie.",
+    )
+    return successes
+
+
 def main():
     """Główna funkcja skryptu."""
+    parser = argparse.ArgumentParser(description="Skanowanie kart lub przetwarzanie folderu")
+    parser.add_argument(
+        "--mode",
+        choices=["skaner", "folder"],
+        default="skaner",
+        help="Tryb działania programu",
+    )
+    parser.add_argument(
+        "--input",
+        help="Ścieżka do katalogu z obrazami (tylko w trybie folder)",
+    )
+    parser.add_argument(
+        "--output",
+        help="Ścieżka docelowa dla plików wynikowych (tylko w trybie folder)",
+    )
+
+    args = parser.parse_args()
+
+    if args.mode == "folder":
+        if not args.input:
+            print("BŁĄD: W trybie 'folder' należy podać parametr --input.", file=sys.stderr)
+            sys.exit(1)
+
+        output_dir = args.output or os.path.join(args.input, "wyniki")
+        zapisane = process_directory(args.input, output_dir)
+        print(f"Zakończono tryb folderowy. Zapisano {zapisane} plików.")
+        return
+
+    ensure_module("sane", "pip install python-sane")
+    import sane  # type: ignore  # noqa: WPS433
+
     print("Inicjalizacja SANE...")
     sane.init()
 
