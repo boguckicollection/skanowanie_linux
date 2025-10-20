@@ -3,6 +3,7 @@ import sys
 import argparse
 import importlib.util
 import shutil
+from dataclasses import dataclass
 from datetime import datetime
 
 def ensure_module(name: str, install_hint: str) -> None:
@@ -25,9 +26,9 @@ from PIL import Image, ImageEnhance
 
 # --- Konfiguracja ---
 DPI = 600
-CARD_WIDTH_MM = 63.5
-CARD_HEIGHT_MM = 88.9
-DIMENSION_TOLERANCE = 0.10  # 10%
+CARD_WIDTH_MM_DEFAULT = 63.5
+CARD_HEIGHT_MM_DEFAULT = 88.9
+DIMENSION_TOLERANCE_DEFAULT = 0.25  # szersza tolerancja, traktowana jako filtr miękki
 
 # Nazwa skanera pozostała dla kompatybilności, ale nie jest używana bezpośrednio.
 NAZWA_SKANERA = "fujitsu:fi-630dj:13583"  # Domyślna nazwa skanera (fallback)
@@ -38,6 +39,62 @@ WSP_KONTRASTU = 1.30  # Podbicie kontrastu, by wyrównać słabsze skany
 WSP_NASYCENIA = 1.10  # 1.0 = bez zmian, > 1.0 = żywsze kolory
 
 # --- Koniec Konfiguracji ---
+
+
+def _get_env_float(name: str, default: float | None) -> float | None:
+    """Pobiera wartość zmiennej środowiskowej jako float (z komunikatem o błędzie)."""
+
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    try:
+        return float(value)
+    except ValueError:
+        print(
+            f"UWAGA: Zmienna środowiskowa {name} ma nieprawidłową wartość '{value}'. Używam {default}.",
+            file=sys.stderr,
+        )
+        return default
+
+
+@dataclass
+class CardDetectionConfig:
+    """Konfiguracja detekcji karty na obrazie."""
+
+    card_width_mm: float = CARD_WIDTH_MM_DEFAULT
+    card_height_mm: float = CARD_HEIGHT_MM_DEFAULT
+    dimension_tolerance: float = DIMENSION_TOLERANCE_DEFAULT
+    aspect_ratio_override: float | None = None
+
+    def expected_ratio(self) -> float:
+        """Zwraca docelowy stosunek boków (dłuższy / krótszy)."""
+
+        if self.aspect_ratio_override and self.aspect_ratio_override > 0:
+            return float(self.aspect_ratio_override)
+
+        long_edge = max(self.card_width_mm, self.card_height_mm)
+        short_edge = min(self.card_width_mm, self.card_height_mm)
+        if short_edge <= 0:
+            return 1.0
+        return long_edge / short_edge
+
+    def ratio_bounds(self) -> tuple[float, float, float]:
+        """Zwraca (ratio_docelowy, ratio_min, ratio_max) przy miękkiej tolerancji."""
+
+        expected_ratio = self.expected_ratio()
+        tolerance = max(self.dimension_tolerance, 0.0)
+        ratio_min = max(expected_ratio * (1 - tolerance), 0.0)
+        ratio_max = expected_ratio * (1 + tolerance)
+        return expected_ratio, ratio_min, ratio_max
+
+    def tolerance_pct(self) -> float:
+        """Zwraca tolerancję w procentach."""
+
+        return max(self.dimension_tolerance, 0.0) * 100
+
+
+DETECTION_CONFIG = CardDetectionConfig()
 
 def order_points(pts):
     """Porządkuje 4 rogi prostokąta: lewy-górny, prawy-górny, prawy-dolny, lewy-dolny."""
@@ -50,7 +107,7 @@ def order_points(pts):
     rect[3] = pts[np.argmax(diff)]
     return rect
 
-def process_image(image_path):
+def process_image(image_path, detection_config: CardDetectionConfig | None = None):
     """
     Odnajduje kartę na obrazie, wycina ją, prostuje i poprawia kolory.
     Zwraca przetworzony obraz jako obiekt PIL.Image lub None, jeśli nie znaleziono karty.
@@ -91,10 +148,8 @@ def process_image(image_path):
         print("  BŁĄD: Nie znaleziono żadnych konturów.")
         return None
 
-    expected_ratio = max(CARD_WIDTH_MM, CARD_HEIGHT_MM) / min(CARD_WIDTH_MM, CARD_HEIGHT_MM)
-
-    ratio_min = expected_ratio * (1 - DIMENSION_TOLERANCE)
-    ratio_max = expected_ratio * (1 + DIMENSION_TOLERANCE)
+    config = detection_config or DETECTION_CONFIG
+    expected_ratio, ratio_min, ratio_max = config.ratio_bounds()
 
     image_area = image.shape[0] * image.shape[1]
     area_min_fraction = 0.05
@@ -112,13 +167,16 @@ def process_image(image_path):
         "  Kryteria detekcji karty:",
         f" powierzchnia ~{area_min:.0f}-{area_max:.0f}px^2 ("
         f"{area_min_pct:.0f}-{area_max_pct:.0f}% kadru{margin_note}),",
-        f" stosunek boków ~{expected_ratio:.3f} ({ratio_min:.3f}-{ratio_max:.3f})"
+        f" stosunek boków docelowy {expected_ratio:.3f} (miękki zakres {ratio_min:.3f}-{ratio_max:.3f}, ±{config.tolerance_pct():.1f}%)"
     )
 
     # Sortowanie konturów według pola powierzchni, od największych
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
     card_contour = None
+    soft_candidate = None
+    soft_candidate_area = 0.0
+    soft_candidate_info = ""
     for c in contours:
         # Aproksymacja konturu do prostszej figury i podstawowe filtrowanie
         peri = cv2.arcLength(c, True)
@@ -135,29 +193,60 @@ def process_image(image_path):
         area_ok = area_min <= approx_area <= area_max
         ratio_ok = ratio_min <= ratio <= ratio_max
 
+        ratio_delta_pct = abs(ratio - expected_ratio) / expected_ratio * 100 if expected_ratio else 0.0
+        approx_points = len(approx)
+
         print(
             "    Kontur:",
             f" krótki bok={short_side:.1f}px,",
             f" długi bok={long_side:.1f}px,",
-            f" ratio={ratio:.3f} (ok={ratio_ok}),",
-            f" pole~{approx_area:.0f}px^2 (ok={area_ok})"
+            f" ratio={ratio:.3f} (odchyłka {ratio_delta_pct:.1f}%, ok={ratio_ok}),",
+            f" pole~{approx_area:.0f}px^2 (ok={area_ok}),",
+            f" wierzchołków={approx_points}"
         )
 
-        if not (area_ok and ratio_ok):
+        if not area_ok:
+            print("    -> Odrzucono kontur: poza zakresem powierzchni.")
             continue
 
-        # Jeśli aproksymowany kontur ma 4 rogi – wykorzystujemy je
-        if len(approx) == 4:
-            card_contour = approx.reshape(4, 2).astype("float32")
+        if ratio_ok:
+            if approx_points == 4:
+                card_contour = approx.reshape(4, 2).astype("float32")
+                reason = "ratio w tolerancji i 4 wierzchołki"
+            else:
+                box = cv2.boxPoints(rect)
+                card_contour = np.array(box, dtype="float32")
+                reason = "ratio w tolerancji (użyto prostokąta minimalnego)"
+            print(f"    -> Kontur zaakceptowany jako karta ({reason}).")
+            break
+
+        if approx_points == 4:
+            candidate_points = approx.reshape(4, 2).astype("float32")
+            candidate_type = "aproksymowany czworokąt"
         else:
-            box = cv2.boxPoints(rect)
-            card_contour = np.array(box, dtype="float32")
-        print("    -> Kontur zaakceptowany jako karta.")
-        break
+            candidate_points = np.array(cv2.boxPoints(rect), dtype="float32")
+            candidate_type = "prostokąt minimalny"
+
+        if approx_area > soft_candidate_area:
+            soft_candidate_area = approx_area
+            soft_candidate = candidate_points
+            soft_candidate_info = (
+                f"{candidate_type} o polu ~{approx_area:.0f}px^2, ratio={ratio:.3f}"
+                f" (odchyłka {ratio_delta_pct:.1f}%)"
+            )
+            print("    -> Kontur zapisano jako najlepszego kandydata miękkiego filtra.")
+        else:
+            print("    -> Kontur pozostaje poza tolerancją ratio.")
 
     if card_contour is None:
-        print("  BŁĄD: Nie udało się zidentyfikować karty na obrazie.")
-        return None
+        if soft_candidate is not None:
+            card_contour = soft_candidate
+            print("  UWAGA: Użyto miękkiego dopasowania – wybrano kontur poza tolerancją ratio.")
+            if soft_candidate_info:
+                print(f"         Szczegóły kandydata: {soft_candidate_info}.")
+        else:
+            print("  BŁĄD: Nie udało się zidentyfikować karty na obrazie.")
+            return None
 
     # 3. Transformacja perspektywy (prostowanie)
     rect = order_points(card_contour)
@@ -211,7 +300,11 @@ def process_image(image_path):
     return final_image_pil
 
 
-def process_directory(input_dir, output_dir):
+def process_directory(
+    input_dir,
+    output_dir,
+    detection_config: CardDetectionConfig | None = None,
+):
     """Przetwarza wszystkie obsługiwane obrazy w katalogu wejściowym."""
     print(f"Przetwarzanie katalogu: {input_dir}")
 
@@ -238,7 +331,7 @@ def process_directory(input_dir, output_dir):
         source_path = os.path.join(input_dir, filename)
         print(f"Przygotowanie do przetwarzania pliku nr {idx}: {source_path}")
 
-        wynik = process_image(source_path)
+        wynik = process_image(source_path, detection_config=detection_config)
         if wynik is None:
             print(
                 f"  UWAGA: Plik '{filename}' został pominięty z powodu błędu przetwarzania."
@@ -263,12 +356,58 @@ def process_directory(input_dir, output_dir):
 
 def main():
     """Główna funkcja skryptu."""
+    global DETECTION_CONFIG
+
+    env_card_width = _get_env_float("SCAN_CARD_WIDTH_MM", DETECTION_CONFIG.card_width_mm)
+    env_card_height = _get_env_float("SCAN_CARD_HEIGHT_MM", DETECTION_CONFIG.card_height_mm)
+    env_ratio_tolerance = _get_env_float(
+        "SCAN_RATIO_TOLERANCE",
+        DETECTION_CONFIG.dimension_tolerance,
+    )
+    env_aspect_ratio = _get_env_float(
+        "SCAN_CARD_ASPECT_RATIO",
+        DETECTION_CONFIG.aspect_ratio_override,
+    )
+
+    card_width_default = env_card_width if env_card_width is not None else DETECTION_CONFIG.card_width_mm
+    card_height_default = env_card_height if env_card_height is not None else DETECTION_CONFIG.card_height_mm
+    ratio_tolerance_default = (
+        env_ratio_tolerance if env_ratio_tolerance is not None else DETECTION_CONFIG.dimension_tolerance
+    )
+
     parser = argparse.ArgumentParser(description="Skanowanie kart lub przetwarzanie folderu")
     parser.add_argument(
         "--mode",
         choices=["skaner", "folder"],
         default="skaner",
         help="Tryb działania programu",
+    )
+    parser.add_argument(
+        "--card-width-mm",
+        type=float,
+        default=card_width_default,
+        help="Oczekiwana szerokość krótszego boku karty w mm (ENV: SCAN_CARD_WIDTH_MM)",
+    )
+    parser.add_argument(
+        "--card-height-mm",
+        type=float,
+        default=card_height_default,
+        help="Oczekiwana długość dłuższego boku karty w mm (ENV: SCAN_CARD_HEIGHT_MM)",
+    )
+    parser.add_argument(
+        "--ratio-tolerance",
+        type=float,
+        default=ratio_tolerance_default,
+        help=(
+            "Miękka tolerancja stosunku boków (np. 0.25 = ±25%, ENV: SCAN_RATIO_TOLERANCE)."
+            " Wyższa wartość zwiększa akceptację odchyleń."
+        ),
+    )
+    parser.add_argument(
+        "--aspect-ratio",
+        type=float,
+        default=env_aspect_ratio,
+        help="Bezpośrednio podany stosunek boków (ENV: SCAN_CARD_ASPECT_RATIO). Zastępuje wymiary.",
     )
     parser.add_argument(
         "--input",
@@ -281,13 +420,36 @@ def main():
 
     args = parser.parse_args()
 
+    detection_config = CardDetectionConfig(
+        card_width_mm=args.card_width_mm,
+        card_height_mm=args.card_height_mm,
+        dimension_tolerance=args.ratio_tolerance,
+        aspect_ratio_override=args.aspect_ratio,
+    )
+
+    DETECTION_CONFIG = detection_config
+
+    ratio_source = (
+        f"wyliczony z wymiarów {detection_config.card_width_mm:.2f}x{detection_config.card_height_mm:.2f} mm"
+        if detection_config.aspect_ratio_override is None
+        else "ustawiony ręcznie"
+    )
+    print(
+        "Konfiguracja detekcji kart:",
+        f" szerokość={detection_config.card_width_mm:.2f} mm,",
+        f" wysokość={detection_config.card_height_mm:.2f} mm,",
+        f" tolerancja=±{detection_config.tolerance_pct():.1f}%,",
+        f" stosunek docelowy={detection_config.expected_ratio():.3f} ({ratio_source}).",
+        "Filtr stosunku boków działa w trybie miękkim (kandydat o największym polu jest zachowywany).",
+    )
+
     if args.mode == "folder":
         if not args.input:
             print("BŁĄD: W trybie 'folder' należy podać parametr --input.", file=sys.stderr)
             sys.exit(1)
 
         output_dir = args.output or os.path.join(args.input, "wyniki")
-        zapisane = process_directory(args.input, output_dir)
+        zapisane = process_directory(args.input, output_dir, detection_config=DETECTION_CONFIG)
         print(f"Zakończono tryb folderowy. Zapisano {zapisane} plików.")
         return
 
@@ -409,7 +571,10 @@ def main():
             # Przetwarzanie zeskanowanego obrazu
             finalny_obraz = None
             try:
-                finalny_obraz = process_image(temp_scan_path)
+                finalny_obraz = process_image(
+                    temp_scan_path,
+                    detection_config=DETECTION_CONFIG,
+                )
 
                 if finalny_obraz is not None:
                     nazwa_pliku = os.path.join(
