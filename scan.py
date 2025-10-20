@@ -141,6 +141,11 @@ def process_image(image_path, detection_config: CardDetectionConfig | None = Non
     )
     edges = cv2.Canny(blurred, lower, upper)
 
+    # Morfologiczne domknięcie krawędzi, aby połączyć rozdzielone fragmenty konturów.
+    kernel_size = 5
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+
     # 2. Znalezienie konturów (kształtów) na obrazie
     contours, _ = cv2.findContours(edges.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -177,6 +182,10 @@ def process_image(image_path, detection_config: CardDetectionConfig | None = Non
     soft_candidate = None
     soft_candidate_area = 0.0
     soft_candidate_info = ""
+
+    extra_soft_factor = max(config.dimension_tolerance * 2, 0.5)
+    ratio_soft_min = max(1.0, expected_ratio * (1 - extra_soft_factor))
+    ratio_soft_max = expected_ratio * (1 + extra_soft_factor)
     for c in contours:
         # Aproksymacja konturu do prostszej figury i podstawowe filtrowanie
         peri = cv2.arcLength(c, True)
@@ -196,6 +205,19 @@ def process_image(image_path, detection_config: CardDetectionConfig | None = Non
         ratio_delta_pct = abs(ratio - expected_ratio) / expected_ratio * 100 if expected_ratio else 0.0
         approx_points = len(approx)
 
+        if approx_points == 4:
+            candidate_points = approx.reshape(4, 2).astype("float32")
+            candidate_type = "aproksymowany czworokąt"
+        else:
+            candidate_points = np.array(cv2.boxPoints(rect), dtype="float32")
+            candidate_type = "prostokąt minimalny"
+
+        candidate_summary = (
+            f"{candidate_type} o polu ~{approx_area:.0f}px^2, ratio={ratio:.3f}"
+            f" (odchyłka {ratio_delta_pct:.1f}%)"
+        )
+        ratio_soft_ok = ratio_soft_min <= ratio <= ratio_soft_max
+
         print(
             "    Kontur:",
             f" krótki bok={short_side:.1f}px,",
@@ -207,33 +229,27 @@ def process_image(image_path, detection_config: CardDetectionConfig | None = Non
 
         if not area_ok:
             print("    -> Odrzucono kontur: poza zakresem powierzchni.")
+            if ratio_soft_ok and approx_area > soft_candidate_area:
+                soft_candidate_area = approx_area
+                soft_candidate = candidate_points
+                soft_candidate_info = candidate_summary + " (poza zakresem powierzchni)"
+                print("       Zachowano jako najlepszego kandydata miękkiego filtra (powierzchnia).")
             continue
 
         if ratio_ok:
             if approx_points == 4:
-                card_contour = approx.reshape(4, 2).astype("float32")
+                card_contour = candidate_points
                 reason = "ratio w tolerancji i 4 wierzchołki"
             else:
-                box = cv2.boxPoints(rect)
-                card_contour = np.array(box, dtype="float32")
+                card_contour = candidate_points
                 reason = "ratio w tolerancji (użyto prostokąta minimalnego)"
             print(f"    -> Kontur zaakceptowany jako karta ({reason}).")
             break
 
-        if approx_points == 4:
-            candidate_points = approx.reshape(4, 2).astype("float32")
-            candidate_type = "aproksymowany czworokąt"
-        else:
-            candidate_points = np.array(cv2.boxPoints(rect), dtype="float32")
-            candidate_type = "prostokąt minimalny"
-
-        if approx_area > soft_candidate_area:
+        if ratio_soft_ok and approx_area > soft_candidate_area:
             soft_candidate_area = approx_area
             soft_candidate = candidate_points
-            soft_candidate_info = (
-                f"{candidate_type} o polu ~{approx_area:.0f}px^2, ratio={ratio:.3f}"
-                f" (odchyłka {ratio_delta_pct:.1f}%)"
-            )
+            soft_candidate_info = candidate_summary
             print("    -> Kontur zapisano jako najlepszego kandydata miękkiego filtra.")
         else:
             print("    -> Kontur pozostaje poza tolerancją ratio.")
