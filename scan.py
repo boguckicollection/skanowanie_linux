@@ -157,22 +157,46 @@ def process_image(image_path, detection_config: CardDetectionConfig | None = Non
     expected_ratio, ratio_min, ratio_max = config.ratio_bounds()
 
     image_area = image.shape[0] * image.shape[1]
-    area_min_fraction = 0.05
+    expected_card_area_px = None
+    expected_area_fraction = None
+    if (
+        config.card_width_mm > 0
+        and config.card_height_mm > 0
+        and DPI > 0
+    ):
+        px_per_mm = DPI / 25.4
+        expected_card_area_px = (
+            config.card_width_mm
+            * config.card_height_mm
+            * (px_per_mm**2)
+        )
+        expected_area_fraction = expected_card_area_px / image_area if image_area else None
+
+    base_area_min_fraction = 0.002  # 0.2% kadru – pozwala na niewielkie kontury
+    area_min_fraction = base_area_min_fraction
+    if expected_area_fraction:
+        # Dopuszczamy mniejsze kontury, ale preferujemy te zbliżone do oczekiwanego rozmiaru
+        area_min_fraction = max(base_area_min_fraction, expected_area_fraction * 0.3)
     area_max_fraction = 0.98
-    area_margin_fraction = 0.02  # pozwala zaakceptować karty wypełniające kadr
 
     area_min = image_area * area_min_fraction
-    area_max = image_area * (1 + area_margin_fraction)
+    area_max = image_area * area_max_fraction
 
     area_min_pct = area_min_fraction * 100
     area_max_pct = min(area_max_fraction * 100, 100)
-    margin_note = " + margines" if area_max > image_area else ""
+    expected_area_note = ""
+    if expected_card_area_px and expected_area_fraction:
+        expected_area_note = (
+            f" oczekiwana powierzchnia ~{expected_card_area_px:.0f}px^2"
+            f" (~{expected_area_fraction * 100:.1f}% kadru)"
+        )
 
     print(
         "  Kryteria detekcji karty:",
         f" powierzchnia ~{area_min:.0f}-{area_max:.0f}px^2 ("
-        f"{area_min_pct:.0f}-{area_max_pct:.0f}% kadru{margin_note}),",
-        f" stosunek boków docelowy {expected_ratio:.3f} (miękki zakres {ratio_min:.3f}-{ratio_max:.3f}, ±{config.tolerance_pct():.1f}%)"
+        f"{area_min_pct:.1f}-{area_max_pct:.0f}% kadru),",
+        f" stosunek boków docelowy {expected_ratio:.3f} (miękki zakres {ratio_min:.3f}-{ratio_max:.3f}, ±{config.tolerance_pct():.1f}%)",
+        expected_area_note
     )
 
     # Sortowanie konturów według pola powierzchni, od największych
@@ -182,6 +206,9 @@ def process_image(image_path, detection_config: CardDetectionConfig | None = Non
     soft_candidate = None
     soft_candidate_area = 0.0
     soft_candidate_info = ""
+    best_candidate_score = float("inf")
+    best_candidate_info = ""
+    best_candidate_points = None
 
     extra_soft_factor = max(config.dimension_tolerance * 2, 0.5)
     ratio_soft_min = max(1.0, expected_ratio * (1 - extra_soft_factor))
@@ -237,14 +264,32 @@ def process_image(image_path, detection_config: CardDetectionConfig | None = Non
             continue
 
         if ratio_ok:
-            if approx_points == 4:
-                card_contour = candidate_points
-                reason = "ratio w tolerancji i 4 wierzchołki"
+            score = ratio_delta_pct
+            score_details: list[str] = [f"odchyłka ratio {ratio_delta_pct:.1f}%"]
+            if expected_area_fraction and expected_area_fraction > 0 and image_area > 0:
+                area_fraction = approx_area / image_area
+                area_delta_pct = abs(area_fraction - expected_area_fraction) / expected_area_fraction * 100
+                score += area_delta_pct * 0.5
+                score_details.append(f"różnica pola {area_delta_pct:.1f}% względem oczekiwanego")
+            if approx_points != 4:
+                score += 5.0
+                score_details.append("kara za brak 4 wierzchołków")
+
+            if score < best_candidate_score:
+                best_candidate_score = score
+                best_candidate_points = candidate_points
+                best_candidate_info = (
+                    f"{candidate_summary}, score={score:.2f} (" + ", ".join(score_details) + ")"
+                )
+                print(
+                    f"    -> Kontur zapisano jako nowego lidera (score={score:.2f})."
+                )
             else:
-                card_contour = candidate_points
-                reason = "ratio w tolerancji (użyto prostokąta minimalnego)"
-            print(f"    -> Kontur zaakceptowany jako karta ({reason}).")
-            break
+                print(
+                    "    -> Kontur spełnia kryteria, ale jest gorszy od aktualnego lidera "
+                    f"(score={score:.2f} >= {best_candidate_score:.2f})."
+                )
+            continue
 
         if ratio_soft_ok and approx_area > soft_candidate_area:
             soft_candidate_area = approx_area
@@ -253,6 +298,11 @@ def process_image(image_path, detection_config: CardDetectionConfig | None = Non
             print("    -> Kontur zapisano jako najlepszego kandydata miękkiego filtra.")
         else:
             print("    -> Kontur pozostaje poza tolerancją ratio.")
+
+    if best_candidate_points is not None:
+        card_contour = best_candidate_points
+        if best_candidate_info:
+            print(f"  Wybrano kontur spełniający ostrą tolerancję: {best_candidate_info}.")
 
     if card_contour is None:
         if soft_candidate is not None:
