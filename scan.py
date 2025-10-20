@@ -158,25 +158,58 @@ def process_image(image_path, detection_config: CardDetectionConfig | None = Non
 
     image_area = image.shape[0] * image.shape[1]
     expected_card_area_px = None
+    expected_area_fraction_raw = None
     expected_area_fraction = None
-    if (
-        config.card_width_mm > 0
-        and config.card_height_mm > 0
-        and DPI > 0
-    ):
-        px_per_mm = DPI / 25.4
-        expected_card_area_px = (
-            config.card_width_mm
-            * config.card_height_mm
-            * (px_per_mm**2)
-        )
-        expected_area_fraction = expected_card_area_px / image_area if image_area else None
+    expected_area_fraction_note = ""
+    dpi_used: float | None = None
+    dpi_values: list[float] = []
+    if config.card_width_mm > 0 and config.card_height_mm > 0:
+        try:
+            with Image.open(image_path) as pil_image_for_meta:
+                dpi_info = pil_image_for_meta.info.get("dpi")
+        except Exception as exc:  # pragma: no cover - diagnostyka błędów IO
+            expected_area_fraction_note = (
+                f" brak wiarygodnych danych DPI ({exc})."
+            )
+        else:
+            if isinstance(dpi_info, tuple):
+                dpi_values = [
+                    float(v)
+                    for v in dpi_info
+                    if isinstance(v, (int, float)) and v > 0
+                ]
+            elif isinstance(dpi_info, (int, float)) and dpi_info > 0:
+                dpi_values = [float(dpi_info)]
+
+        if dpi_values and image_area > 0:
+            dpi_used = sum(dpi_values) / len(dpi_values)
+            px_per_mm = dpi_used / 25.4
+            expected_card_area_px = (
+                config.card_width_mm
+                * config.card_height_mm
+                * (px_per_mm**2)
+            )
+            expected_area_fraction_raw = expected_card_area_px / image_area
+
+            if expected_area_fraction_raw and expected_area_fraction_raw > 0:
+                safe_cap = 0.15
+                expected_area_fraction = min(expected_area_fraction_raw, safe_cap)
+                if expected_area_fraction_raw > safe_cap:
+                    expected_area_fraction_note = (
+                        f" frakcja ograniczona do {expected_area_fraction * 100:.2f}%"
+                        f" (z {expected_area_fraction_raw * 100:.2f}%)."
+                    )
+            else:
+                expected_area_fraction_note = " frakcja uznana za niewiarygodną."
+        elif not expected_area_fraction_note:
+            expected_area_fraction_note = " brak danych DPI w metadanych."
 
     base_area_min_fraction = 0.002  # 0.2% kadru – pozwala na niewielkie kontury
     area_min_fraction = base_area_min_fraction
     if expected_area_fraction:
         # Dopuszczamy mniejsze kontury, ale preferujemy te zbliżone do oczekiwanego rozmiaru
-        area_min_fraction = max(base_area_min_fraction, expected_area_fraction * 0.3)
+        preferred_min = max(base_area_min_fraction, expected_area_fraction * 0.3)
+        area_min_fraction = min(preferred_min, expected_area_fraction)
     area_max_fraction = 0.98
 
     area_min = image_area * area_min_fraction
@@ -190,6 +223,17 @@ def process_image(image_path, detection_config: CardDetectionConfig | None = Non
             f" oczekiwana powierzchnia ~{expected_card_area_px:.0f}px^2"
             f" (~{expected_area_fraction * 100:.1f}% kadru)"
         )
+        if dpi_used:
+            expected_area_note += f" (na podstawie DPI {dpi_used:.1f})"
+        if (
+            expected_area_fraction_raw
+            and expected_area_fraction_raw > expected_area_fraction
+        ):
+            expected_area_note += (
+                f" (ograniczono z {expected_area_fraction_raw * 100:.1f}%)"
+            )
+    elif expected_area_fraction_note:
+        expected_area_note = expected_area_fraction_note
 
     print(
         "  Kryteria detekcji karty:",
@@ -266,7 +310,11 @@ def process_image(image_path, detection_config: CardDetectionConfig | None = Non
         if ratio_ok:
             score = ratio_delta_pct
             score_details: list[str] = [f"odchyłka ratio {ratio_delta_pct:.1f}%"]
-            if expected_area_fraction and expected_area_fraction > 0 and image_area > 0:
+            if (
+                expected_area_fraction is not None
+                and expected_area_fraction > 0
+                and image_area > 0
+            ):
                 area_fraction = approx_area / image_area
                 area_delta_pct = abs(area_fraction - expected_area_fraction) / expected_area_fraction * 100
                 score += area_delta_pct * 0.5
